@@ -1,0 +1,354 @@
+---
+title: "Empirical Bayes y STAN"
+author: "Gonzalo Chebi"
+date: "6/3/2026"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, message = FALSE, warning = FALSE,
+  fig.width = 8, fig.height = 5, dpi = 150, fig.align = "center"
+)
+library(dplyr)
+library(tidyr)
+library(Lahman)
+library(ggplot2)
+library(scales)
+
+# Paleta + theme consistente para todos los plots
+paleta_dos <- c("bateadores" = "#2A9D8F", "beta" = "#E76F51")
+
+tema_lindo <- function() {
+  theme_minimal(base_size = 13) +
+    theme(
+      plot.title       = element_text(hjust = 0.5, face = "bold", size = 14,
+                                      margin = margin(b = 10)),
+      plot.subtitle    = element_text(hjust = 0.5, color = "grey40",
+                                      margin = margin(b = 12)),
+      plot.background  = element_rect(fill = "white", color = NA),
+      panel.background = element_rect(fill = "white", color = NA),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = "grey92"),
+      axis.title       = element_text(color = "grey20"),
+      legend.position  = "right"
+    )
+}
+
+bateadores = Batting %>%
+  filter(AB > 0) %>% # me quedo solo con las filas con > 0 intentos
+  group_by(playerID) %>% # agrupo por playerId
+  summarize(hits = sum(H), intentos = sum(AB))  # para cada grupo (playerId), sumo los intentos y los hits
+
+```
+```{r}
+Batting
+```
+
+```{r}
+bateadores
+```
+
+
+```{r}
+bat_aux = bateadores %>% 
+  mutate(promedio = hits/intentos) %>% #creamos una columna que se llama promedio
+  filter(intentos > 1000) #me quedo con los palyerId con mas de 1000 intentos
+
+m = MASS::fitdistr(bat_aux$promedio, dbeta,
+                  start = list(shape1 = 100, shape2 = 10))
+
+alpha0 <- m$estimate[1]
+beta0 <- m$estimate[2]
+
+```
+
+
+
+```{r ajuste_prior}
+rbind(
+  tibble(promedio = bat_aux$promedio, tipo = 'bateadores'),
+  tibble(promedio = rbeta(100000, alpha0, beta0), tipo = 'beta')
+) %>%
+  ggplot(aes(x = promedio, fill = tipo, y = ..density..)) +
+  geom_histogram(position = 'identity', alpha = 0.55,
+                 bins = 50, color = "white", linewidth = 0.2) +
+  scale_fill_manual(values = paleta_dos,
+                    labels = c("Empírico (AB > 1000)",
+                               expression("Beta("*hat(alpha)*","~hat(beta)*")"))) +
+  labs(
+    title = "Ajuste de la prior por método de máxima verosimilitud",
+    x = "Promedio de bateo",
+    y = "Densidad",
+    fill = NULL
+  ) +
+  tema_lindo()
+```
+
+
+```{r}
+bateadores
+```
+
+
+```{r shrinkage_plot, fig.height = 6}
+bateadores %>%
+  mutate(
+    estim_frecuentista = hits / intentos,
+    estim_emp_bayes    = (alpha0 + hits) / (alpha0 + beta0 + intentos)
+  ) %>%
+  ggplot(aes(x = estim_frecuentista, y = estim_emp_bayes)) +
+  geom_point(aes(color = log(intentos)), alpha = 0.55, size = 1.4) +
+  geom_abline(intercept = 0, slope = 1,
+              color = "#E76F51", linewidth = 0.7, linetype = "dashed") +
+  geom_hline(yintercept = alpha0 / (alpha0 + beta0),
+             color = "grey35", linewidth = 0.5, linetype = "dotted") +
+  annotate("text", x = 0.05, y = alpha0 / (alpha0 + beta0) + 0.012,
+           label = "media de la prior", size = 3.3, color = "grey35", hjust = 0) +
+  scale_color_viridis_c(option = "viridis", end = 0.9) +
+  labs(
+    title = "Shrinkage hacia la prior",
+    subtitle = "Estimación frecuentista vs Empirical Bayes",
+    x = "Promedio empírico  (H / AB)",
+    y = expression("Empirical Bayes:  ("*alpha[0]+H*") / ("*alpha[0]+beta[0]+AB*")"),
+    color = "log(AB)"
+  ) +
+  tema_lindo()
+```
+
+## (g) Ranking alternativo: $P(p_i > 0.3 \mid \text{datos})$
+
+La posterior de cada jugador es
+
+$$p_i \mid \text{datos} \sim \text{Beta}(\alpha_0 + H_i,\; \beta_0 + AB_i - H_i),$$
+
+así que $P(p_i > 0.3 \mid \text{datos}) = 1 - F_{\text{Beta}}(0.3;\; \alpha_0 + H_i,\; \beta_0 + AB_i - H_i)$.
+Lo calculamos con `pbeta` y armamos los dos rankings.
+
+```{r ranking}
+rankings <- bateadores %>%
+  mutate(
+    alpha_post   = alpha0 + hits,
+    beta_post    = beta0 + intentos - hits,
+    media_post   = alpha_post / (alpha_post + beta_post),
+    prob_gt_03   = pbeta(0.3, alpha_post, beta_post, lower.tail = FALSE),
+    rank_media   = rank(-media_post, ties.method = "min"),
+    rank_prob    = rank(-prob_gt_03,  ties.method = "min")
+  )
+
+# Top 10 por media posterior
+rankings %>%
+  arrange(rank_media) %>%
+  select(playerID, hits, intentos, media_post, prob_gt_03) %>%
+  head(10)
+
+# Top 10 por P(p > 0.3 | datos)
+rankings %>%
+  arrange(rank_prob) %>%
+  select(playerID, hits, intentos, media_post, prob_gt_03) %>%
+  head(10)
+```
+
+```{r ranking_plot, fig.height = 6}
+rankings %>%
+  ggplot(aes(x = rank_media, y = rank_prob)) +
+  geom_point(aes(color = log(intentos)), alpha = 0.55, size = 1.3) +
+  geom_abline(intercept = 0, slope = 1,
+              color = "#E76F51", linewidth = 0.7, linetype = "dashed") +
+  scale_color_viridis_c(option = "viridis", end = 0.9) +
+  scale_x_continuous(labels = label_comma()) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(
+    title = "Dos rankings, dos preguntas distintas",
+    subtitle = expression("Rank por media posterior  vs  rank por  P(p > 0.3 | datos)"),
+    x = "Rank por media posterior",
+    y = expression("Rank por P(p > 0.3 | datos)"),
+    color = "log(AB)"
+  ) +
+  tema_lindo()
+```
+
+### Zoom al top 200
+
+Para ver mejor el reordenamiento en la zona que importa, restringimos a jugadores que están en el top 200 por *alguno* de los dos criterios.
+
+```{r ranking_plot_top200, fig.height = 6}
+rankings %>%
+  filter(rank_media <= 200 | rank_prob <= 200) %>%
+  ggplot(aes(x = rank_media, y = rank_prob)) +
+  geom_point(aes(color = log(intentos)), alpha = 0.75, size = 2) +
+  geom_abline(intercept = 0, slope = 1,
+              color = "#E76F51", linewidth = 0.7, linetype = "dashed") +
+  scale_color_viridis_c(option = "viridis", end = 0.9) +
+  labs(
+    title = "Top 200 — dos rankings comparados",
+    subtitle = "Puntos arriba de la diagonal: relativamente mejor por media que por probabilidad",
+    x = "Rank por media posterior",
+    y = expression("Rank por P(p > 0.3 | datos)"),
+    color = "log(AB)"
+  ) +
+  tema_lindo()
+```
+
+**Interpretación.** La media posterior aproxima $\mathbb{E}[p_i \mid \text{datos}]$, que para jugadores con pocos intentos queda muy shrinkeada al prior y, sin embargo, puede quedar alta si el shrinkage la deja cerca de la media de la prior. La probabilidad $P(p_i > 0.3 \mid \text{datos})$, en cambio, penaliza la **ancho** de la posterior: un jugador con pocos $AB$ tiene posterior ancha y entonces masa significativa por debajo de $0.3$, aun cuando su media posterior sea similar a la de un veterano.
+
+**Qué ranking elegir.** Depende de la función de pérdida implícita:
+
+- **Media posterior** ≡ óptimo bajo pérdida cuadrática. Responde *"¿cuál es la mejor estimación puntual del verdadero promedio?"*.
+- **$P(p_i > c \mid \text{datos})$** responde *"¿de quién tengo más evidencia de que es realmente bueno?"*. Es lo natural si la decisión es binaria (contratar / no contratar) y hay un umbral de calidad $c$.
+- También sirve un **cuantil inferior** de la posterior (p.ej. el percentil 5\%) como ranking conservador — penaliza directamente la incertidumbre y suele coincidir bastante con $P(p > c)$ para un $c$ razonable.
+
+## Una observación importante: AB y skill **no** son independientes
+
+El modelo de Empirical Bayes que armamos asume implícitamente que cada jugador es un draw i.i.d. de la prior $\Lambda$. Pero en el mundo real, **los jugadores con mejor promedio acumulan más turnos al bate**: a un bateador flojo no le dan miles de oportunidades. O sea, $AB_i$ y $p_i$ están correlacionados positivamente (selección / *survivorship bias*).
+
+Lo verificamos directamente:
+
+```{r ab_vs_p_setup}
+bateadores_p <- bateadores %>% mutate(p_emp = hits / intentos)
+
+# Correlación de Spearman (robusta al ruido de low-AB)
+cor_all  <- cor(bateadores_p$intentos, bateadores_p$p_emp, method = "spearman")
+cor_200  <- with(bateadores_p %>% filter(intentos > 200),
+                 cor(log(intentos), p_emp, method = "spearman"))
+c(rho_todos = round(cor_all, 3), rho_AB_gt_200 = round(cor_200, 3))
+
+# Promedio empírico medio por bin de AB
+bins_ab <- bateadores_p %>%
+  mutate(bin_ab = cut(intentos,
+                      breaks = c(0, 10, 50, 200, 500, 1000, 3000, 6000, Inf),
+                      labels = c("1-10","11-50","51-200","201-500",
+                                 "501-1000","1001-3000","3001-6000",">6000"))) %>%
+  group_by(bin_ab) %>%
+  summarise(n = n(), mean_p = mean(p_emp), median_p = median(p_emp), .groups = "drop")
+bins_ab
+```
+
+```{r ab_vs_p_plot, fig.height = 5.5}
+ggplot(bateadores_p, aes(x = intentos, y = p_emp)) +
+  geom_point(alpha = 0.12, size = 0.7, color = "#2A9D8F") +
+  geom_smooth(method = "gam", color = "#E76F51", linewidth = 1, se = TRUE) +
+  scale_x_log10(labels = label_comma()) +
+  coord_cartesian(ylim = c(0, 0.5)) +
+  labs(
+    title = "¿Los jugadores con más AB batean mejor?",
+    subtitle = "Promedio empírico vs AB total (eje log) — smoother GAM",
+    x = "AB total (escala log)",
+    y = "Promedio empírico  H / AB"
+  ) +
+  tema_lindo()
+```
+
+**Lectura.** El smoother sube monótonamente: el promedio empírico medio pasa de ~0.12 en jugadores con $AB \le 10$ a ~0.29 en los que tienen $AB > 6000$. Spearman da $\rho \approx 0.59$ en todos los jugadores y $\rho \approx 0.63$ filtrando $AB > 200$ (sacando ruido de poquísimos turnos).
+
+**Implicancia para el modelo.** Esto rompe el supuesto i.i.d. del Empirical Bayes: la prior $\Lambda$ que ajustamos sobre jugadores con $AB > 1000$ es la distribución de $p$ **condicional a haber sobrevivido**, no la distribución marginal. Aplicar esa prior a un rookie con 5 turnos sobreestima su skill esperado (le da una media posterior demasiado optimista) y, peor, subestima cuánta variabilidad hay en la población de jugadores en general. Un modelo más fiel requeriría modelar conjuntamente skill y oportunidades — pero eso ya nos saca del marco beta-binomial limpio.
+
+## Modelo conjunto: $AB \mid p$ + $H \mid AB, p$  → STAN
+
+Modelamos explícitamente la dependencia entre $AB$ y $p$:
+
+$$
+p_i \sim \text{Beta}(\alpha, \beta), \qquad
+\log AB_i \mid p_i \sim \mathcal{N}(a + b\,\text{logit}(p_i),\,\sigma^2), \qquad
+H_i \mid AB_i, p_i \sim \text{Bin}(AB_i, p_i).
+$$
+
+Ahora $AB_i$ deja de ser un input fijo: **también es evidencia sobre $p_i$**. La consecuencia matemática es que el posterior $p(p_i \mid H_i, AB_i)$ ya no es Beta — no hay forma cerrada. Lo resolvemos con STAN.
+
+### Programa de STAN
+
+```{stan output.var="modelo_conjunto"}
+data {
+  int<lower=1> N;
+  array[N] int<lower=1> AB;
+  array[N] int<lower=0> H;
+}
+
+transformed data {
+  array[N] real AB_real;
+  for (i in 1:N) AB_real[i] = AB[i];
+}
+
+parameters {
+  real<lower=0> alpha;
+  real<lower=0> beta;
+  real a;
+  real b;
+  real<lower=0> sigma;
+  vector<lower=0, upper=1>[N] p;
+}
+
+model {
+  // Hiperpriors débiles
+  alpha ~ exponential(0.01);
+  beta  ~ exponential(0.01);
+  a     ~ normal(0, 5);
+  b     ~ normal(0, 5);
+  sigma ~ exponential(1);
+
+  // Modelo jerárquico
+  p       ~ beta(alpha, beta);
+  AB_real ~ lognormal(a + b * logit(p), sigma);
+  H       ~ binomial(AB, p);
+}
+```
+
+### Muestreo
+
+Como el modelo tiene un $p_i$ por jugador, ajustarlo con los ~17000 bateadores tarda mucho. Para fines didácticos lo corremos sobre una submuestra aleatoria de **300 jugadores**.
+
+```{r stan_fit, cache=TRUE, message=FALSE, warning=FALSE}
+library(rstan)
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+
+set.seed(42)
+sub <- bateadores %>% slice_sample(n = 300)
+
+stan_data <- list(
+  N  = nrow(sub),
+  AB = sub$intentos,
+  H  = sub$hits
+)
+
+fit <- sampling(modelo_conjunto, data = stan_data,
+                iter = 2000, chains = 2, seed = 1, refresh = 0)
+```
+
+```{r stan_summary}
+print(fit, pars = c("alpha", "beta", "a", "b", "sigma"),
+      probs = c(0.025, 0.5, 0.975))
+```
+
+### Comparación con Empirical Bayes ingenuo
+
+Extraemos la media posterior de cada $p_i$ y la enfrentamos al estimador EB conjugado $(\alpha_0 + H_i)/(\alpha_0 + \beta_0 + AB_i)$ que usamos antes:
+
+```{r stan_compare, fig.height = 6}
+post_p <- rstan::extract(fit, pars = "p")$p   # iter x N
+p_stan <- colMeans(post_p)
+
+comparacion <- sub %>%
+  mutate(
+    p_emp     = hits / intentos,
+    p_eb_naive = (alpha0 + hits) / (alpha0 + beta0 + intentos),
+    p_stan    = p_stan
+  )
+
+ggplot(comparacion, aes(x = p_eb_naive, y = p_stan)) +
+  geom_point(aes(color = log(intentos)), alpha = 0.7, size = 1.6) +
+  geom_abline(intercept = 0, slope = 1,
+              color = "#E76F51", linewidth = 0.7, linetype = "dashed") +
+  scale_color_viridis_c(option = "viridis", end = 0.9) +
+  labs(
+    title = "Media posterior de p: STAN (modelo conjunto) vs EB ingenuo",
+    subtitle = "La diagonal sería 'mismo estimador'. Diferencias = AB aportando info sobre p.",
+    x = "Empirical Bayes ingenuo  (alpha0 + H) / (alpha0 + beta0 + AB)",
+    y = "STAN — media posterior de p",
+    color = "log(AB)"
+  ) +
+  tema_lindo()
+```
+
+**Qué mirar.** Los puntos oscuros (poco AB) son los que más se alejan de la diagonal. El modelo conjunto los **mueve hacia abajo** respecto al EB ingenuo: bajo el nuevo modelo, tener pocos turnos al bate ya es señal de que $p$ podría ser bajo, y eso tira la media posterior abajo de lo que daba el EB simple. Los puntos amarillos (mucho AB) se quedan casi sobre la diagonal: para ellos el término binomial domina y la corrección por $AB \mid p$ aporta poco.
+
