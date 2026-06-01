@@ -1,0 +1,352 @@
+---
+title: "GLM"
+author: "Sebastian"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Ejercicio 1
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+```
+
+Item a:
+
+```{r}
+data("diamonds")
+
+ggplot(diamonds, aes(x = carat, y = price)) +
+  geom_point(alpha = 0.2) +
+  labs(
+    x = "Quilates (carat)",
+    y = "Precio",
+    title = "Precio vs. peso en quilates"
+  ) +
+  theme_minimal()
+```
+
+
+Item b: 
+
+```{r}
+ggplot(diamonds, aes(x = carat, y = price)) +
+  geom_point(alpha = 0.2) +
+  scale_x_log10() + 
+  scale_y_log10() +  
+  labs(
+    x = "Quilates (carat)",
+    y = "Precio",
+    title = "Precio vs. peso en quilates"
+  ) +
+  theme_minimal()
+```
+Se adquiere una forma lineal. Tiene sentido porque linealiza la relación.
+
+Item c:
+
+```{r}
+diamonds <- diamonds %>%
+  mutate(
+    across(
+      c(cut, color, clarity),
+      ~ factor(.x, ordered = FALSE)
+    )
+  )
+
+```
+
+
+Item d: 
+
+```{r}
+modelo <- lm(
+  log(price) ~ log(carat) + cut + color + clarity,
+  data = diamonds
+)
+
+summary(modelo)
+```
+
+Item e:
+
+Intercept describe un diamente para el cual log(carat) = 0, osea carat = 1 y que las otras
+categorias sean las base: cut = Fair, color = D, clarity = I1.
+
+EL log(price) aumenta B1*log(2) -> el precio aumenta 2^B1
+
+cutIdeal: e^0.16. Osea e^(estimado)
+
+se verifica
+
+
+# Ejercicio 2
+
+
+```{r}
+library(carData)
+titanic <- TitanicSurvival
+```
+
+
+Item a:
+
+```{r}
+titanic_limpio <- TitanicSurvival %>% 
+  filter(!is.na(age)) %>% 
+  mutate(survived = if_else(survived == "yes", 1, 0))
+
+head(titanic_limpio)
+```
+
+Item b
+
+```{r}
+modelo_titanic <- glm(survived ~ sex + age + passengerClass, 
+                      data = titanic_limpio, 
+                      family = binomial)
+
+summary(modelo_titanic)
+```
+
+Item c:
+
+Aumentan: sexfemale, passengerClass1
+Disminuyen: todos los otros
+
+Esto coincide con lo que se cuenta sobre la supervivencia en el titanic.
+
+
+Item d:
+
+```{r}
+grilla_prediccion <- expand.grid(
+  age = 0:80,                                # Edades de 0 a 80 años (de 1 en 1)
+  sex = c("female", "male"),                 # Ambos sexos
+  passengerClass = c("1st", "2nd", "3rd")    # Las tres clases de pasaje
+)
+
+
+grilla_prediccion <- grilla_prediccion %>% 
+  mutate(
+    prob_supervivencia = predict(modelo_titanic, 
+                                 newdata = grilla_prediccion, 
+                                 type = "response")
+  )
+
+
+head(grilla_prediccion)
+```
+
+Item e:
+
+```{r}
+perfiles_especificos <- grilla_prediccion %>% 
+  filter(
+    (sex == "female" & age == 30 & passengerClass == "1st") |
+    (sex == "male" & age == 30 & passengerClass == "3rd") |
+    (sex == "male" & age == 5 & passengerClass == "2nd")
+  )
+
+# Mostrar los resultados formateados
+perfiles_especificos %>% 
+  mutate(prob_porcentaje = paste0(round(prob_supervivencia * 100, 1), "%")) %>% 
+  select(sex, age, passengerClass, prob_porcentaje)
+```
+
+
+
+Item d:
+
+```{r}
+ggplot(grilla_prediccion, aes(x = age, y = prob_supervivencia, color = sex, linetype = passengerClass)) +
+  geom_line(line_width = 1) +
+  labs (
+    x = "Edad",
+    y = "Proba de supervivencia",
+    title = "Proba supervivencia vs Edad"
+  ) + 
+  theme_minimal()
+```
+Las curvas decrecen con la edad y se observa un claro dominio por sex = female y por clases (en orden asc).
+
+
+
+
+# Ejercicio 3
+
+```{r}
+library(Lahman)
+library(MASS)
+data(Batting)
+```
+
+Item a:
+
+```{r}
+Batting <- Batting %>%
+            filter(AB >= 200 & yearID >= 1980)
+```
+
+
+Item b:
+
+```{r}
+modelo_batting <- glm(HR ~ log(AB) + I(yearID - 2000),
+                      data = Batting,
+                      family = poisson)
+
+summary(modelo_batting)
+```
+
+Respecto del Log(AB):
+Esto define una relación de potencia mucho más lógica. Nos dice que los Home Runs son proporcionales a las oportunidades al bate elevadas a un exponente $\beta_1$. Si $\beta_1 = 1$, la relación sería perfectamente lineal (a doble de turnos, doble de HR), lo cual se ajusta mucho mejor a la naturaleza del juego.(escrito en carpeta)
+
+
+
+Item c:
+
+1. Que el cofienciente sea distinto que 1 implica que la relación entre HR y AB no es estrictamente lineal. Como el coficiente es mayor que 1, los Home Runs escalan más rapido que las oportunidades.
+
+2. hay una tasa temporal de 1.009 por año. Es decir a medida que pasan los años aumentaron los homeruns...
+
+
+Item d:
+
+```{r}
+# 1. Crear una grilla para dibujar la curva promedio ideal (ej: para el año 2000)
+grilla_curva <- expand.grid(
+  AB = seq(200, 700, length.out = 500), # Rango de turnos al bate de 200 a 700
+  yearID = 2000                         # Fijamos el año en el 2000 como referencia
+)
+
+# 2. Predecir los HR esperados para la curva usando type = "response"
+grilla_curva <- grilla_curva %>% 
+  mutate(
+    HR_predichos = predict(modelo_batting, newdata = grilla_curva, type = "response")
+  )
+
+# 3. Construir el gráfico con ggplot2
+ggplot() +
+  # Capa 1: Puntos reales de los jugadores (usamos batting_filtrado)
+  geom_point(data = Batting, aes(x = AB, y = HR), 
+             alpha = 0.25, color = "darkgray") +
+  
+  # Capa 2: La curva geométrica que predice el modelo de Poisson
+  geom_line(data = grilla_curva, aes(x = AB, y = HR_predichos), 
+            color = "firebrick", linewidth = 1.2) +
+  
+  # Etiquetas y formato
+  labs(
+    x = "Turnos al Bate (AB)",
+    y = "Home Runs (HR)",
+    title = "Regresión Poisson: Datos Reales vs. Curva Predicha",
+    subtitle = "La curva roja representa la tendencia predicha por el modelo para el año 2000",
+    caption = "Datos originales extraídos de la librería Lahman"
+  ) +
+  theme_minimal()
+```
+
+Si captura, a pesar de que hay mucha dispersión se observa una tendecia creciente de los HR respecto a AB.
+
+
+# Ejercicio 4
+
+```{r}
+library(betareg)
+data(FoodExpenditure)
+```
+
+
+Item a
+
+```{r}
+FoodExpenditure <- FoodExpenditure %>%
+                    mutate(prop = food / income)
+```
+
+
+Item b
+
+```{r}
+summary(FoodExpenditure$prop)
+```
+
+Está entre 0 y 1!
+
+
+Item c
+
+Se espera que sea negativo el coeficiente 
+
+
+Item d
+
+```{r}
+modelo_beta <- betareg(prop ~ income + persons,
+                       data = FoodExpenditure)
+```
+
+Se usa logit como link.
+
+Item e
+
+```{r}
+summary(modelo_food)
+```
+
+Income es negativo, como se habia mencionado anteriormente. Y persons es positivo, tiene sentido ya que al aumentar las personas se gasta más en alimentos.
+
+
+Item f
+
+
+```{r}
+# 1. Crear la grilla de predicción para ingresos desde el mínimo al máximo del dataset
+grilla_beta <- expand.grid(
+  income = seq(min(FoodExpenditure$income), max(FoodExpenditure$income), length.out = 200),
+  persons = c(1, 3, 5) # Los tres niveles solicitados
+)
+
+# 2. R necesita que la variable 'persons' de la grilla sea numérica/factor igual que en el modelo
+# Calculamos las predicciones (por defecto predict en betareg devuelve la media predicha)
+grilla_beta <- grilla_beta %>% 
+  mutate(
+    prop_predicha = predict(modelo_beta, newdata = grilla_beta)
+  )
+
+# 3. Para que ggplot los grafique como curvas separadas por color, pasamos 'persons' a factor
+grilla_beta$persons_fact <- factor(grilla_beta$persons, labels = c("1 persona", "3 personas", "5 personas"))
+FoodExpenditure <- FoodExpenditure %>%
+                    filter(persons == 1 | persons == 3 | persons == 5) %>%
+                    mutate(persons_fact = factor(persons, 
+                               levels = c(1, 3, 5),
+                               labels = c("1 persona", "3 personas", "5   personas")))
+
+# 4. Construir el gráfico superponiendo los datos reales
+ggplot() +
+  geom_point(data = FoodExpenditure, aes(x = income, y = prop, color = persons_fact), 
+             alpha = 0.5, size = 2) +
+  
+  # Curvas teóricas predichas por el modelo Beta
+  geom_line(data = grilla_beta, aes(x = income, y = prop_predicha, color = persons_fact), 
+            linewidth = 1.2) +
+  
+  # Formato y etiquetas
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    x = "Ingreso del Hogar (Income)",
+    y = "Proporción de Gasto en Comida (Prop)",
+    title = "Regresión Beta: Proporción de Gasto en Alimentos vs. Ingreso",
+    subtitle = "Curvas predichas por el modelo según el tamaño del hogar",
+    color = "Tamaño del Hogar"
+  ) +
+  theme_minimal()
+```
+
+
+
+
+

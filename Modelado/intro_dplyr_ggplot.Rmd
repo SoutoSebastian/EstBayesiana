@@ -1,0 +1,475 @@
+---
+title: "Intro a dplyr y ggplot"
+subtitle: "Manipulación y visualización de datos en R"
+author: "Modelado Estadístico — Clase 2"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, message = FALSE, warning = FALSE,
+  fig.width = 7, fig.height = 4.5, dpi = 130, fig.align = "center"
+)
+```
+
+# ¿Por qué dplyr + ggplot?
+
+R "base" puede hacer casi todo, pero la sintaxis es engorrosa y las operaciones de datos quedan dispersas entre `apply`, `subset`, `aggregate`, `merge`, etc. El *tidyverse* propone un enfoque alternativo basado en **verbos** que se encadenan:
+
+- **dplyr** para manipular tablas: filtrar filas, seleccionar columnas, crear variables, agrupar, resumir.
+- **ggplot2** para hacer gráficos: una *gramática* declarativa donde un gráfico se construye sumando capas.
+
+
+```{r libs}
+library(dplyr)
+library(ggplot2)
+```
+
+# El dataset
+
+Vamos a usar `starwars`, un dataset chiquito (87 filas) que viene con `dplyr`. Tiene personajes de Star Wars y atributos como altura, masa, especie, planeta natal, etc.
+
+```{r data_glimpse}
+glimpse(starwars)
+```
+
+Tiene 14 columnas: algunas numéricas (`height` en cm, `mass` en kg, `birth_year`), categóricas (`species`, `sex`, `homeworld`, `eye_color`), y algunas que son listas (películas en las que apareció el personaje). Hay `NA`s — datos reales nunca vienen limpios.
+
+```{r data_preview}
+starwars %>% select(name, height, mass, species, homeworld) %>% head(8)
+```
+
+---
+
+# Parte 1 — dplyr: cinco verbos que cubren el 80%
+
+## `filter()` — quedarse con ciertas filas
+
+`filter()` toma una condición y devuelve solo las filas que la cumplen.
+
+```{r filter_basic}
+# Solo humanos
+starwars %>% filter(species == "Human")
+```
+
+```{r filter_multi}
+# Humanos más altos que 1.80m
+starwars %>% filter(species == "Human", height > 180)
+```
+
+Las comas dentro de `filter()` actúan como AND. Para un OR usás `|`:
+
+```{r filter_or}
+starwars %>% filter(species == "Droid" | species == "Wookiee")
+```
+
+> **En base R esto sería:** `starwars[starwars$species == "Human" & !is.na(starwars$species), ]`. Funciona pero es ruidoso, hay que repetir el nombre de la tabla y manejar los `NA` a mano. dplyr filtra `NA` automáticamente cuando no matchea.
+
+## `select()` — quedarse con ciertas columnas
+
+```{r select_basic}
+starwars %>% select(name, species, height, mass)
+```
+
+Podés usar `-` para *excluir* columnas:
+
+```{r select_drop}
+starwars %>% select(-films, -vehicles, -starships)  # sacar las columnas-lista
+```
+
+Y *helpers* para selección por patrón:
+
+```{r select_helpers}
+starwars %>% select(name, starts_with("birth"), ends_with("color"))
+```
+
+## `mutate()` — crear o modificar columnas
+
+```{r mutate_basic}
+starwars %>%
+  select(name, height, mass) %>%
+  mutate(
+    height_m = height / 100,
+    bmi      = mass / (height_m^2)
+  ) %>%
+  head()
+```
+
+Podés referenciar columnas que acabás de crear dentro del mismo `mutate()`, como `height_m` arriba.
+
+## `arrange()` — ordenar
+
+```{r arrange_basic}
+starwars %>%
+  select(name, height, mass) %>%
+  arrange(-(mass)) %>%   # de mayor a menor
+  head(5)
+```
+
+(Spoiler: Jabba the Hutt pesa 1358 kg.)
+
+## `group_by()` + `summarise()` — agregar
+
+Este es el verbo más poderoso. `group_by()` no cambia los datos, solo "marca" la tabla como agrupada. `summarise()` después colapsa cada grupo a una fila.
+
+```{r groupby_basic}
+starwars %>%
+  group_by(species) %>%
+  mutate(
+    n         = n(),
+    altura    = mean(height, na.rm = TRUE),
+    masa      = mean(mass, na.rm = TRUE)
+  ) %>%
+  arrange(desc(n))
+```
+
+Una línea genera una tabla resumen que en base R serían varios `aggregate()` + `merge()`.
+
+Combinando todo, una pregunta natural: *¿cuáles son las especies con más de 1 personaje, ordenadas por altura promedio?*
+
+```{r groupby_filter}
+starwars %>%
+  group_by(species) %>%
+  summarise(n = n(), altura_media = mean(height, na.rm = TRUE)) %>%
+  filter(n > 1) %>%
+  arrange(desc(altura_media))
+```
+
+---
+
+# Parte 2 — El pipe `%>%`
+
+Todo lo que vimos arriba usa la **pipe** `%>%` (también `|>` en R ≥ 4.1, sintaxis nativa). La pipe toma el resultado de la izquierda y lo pasa como primer argumento a la función de la derecha.
+
+```{r pipe_demo}
+# Estas dos líneas son equivalentes:
+mean(starwars$height, na.rm = TRUE)
+starwars$height %>% mean(na.rm = TRUE)
+```
+
+La gracia se ve cuando encadenás varios pasos. Comparemos con y sin pipe:
+
+```{r pipe_compare, eval=FALSE}
+# Sin pipe — anidamiento, se lee de adentro hacia afuera
+head(arrange(filter(starwars, species == "Human"), desc(height)), 5)
+
+# Con pipe — secuencial, se lee de arriba hacia abajo
+starwars %>%
+  filter(species == "Human") %>%
+  arrange(desc(height)) %>%
+  head(5)
+```
+
+La pipe convierte una expresión anidada en una receta. Esa es la **idea central**: pensar el análisis como una pipeline de verbos.
+
+---
+
+# Parte 3 — ggplot2: la gramática de gráficos
+
+Un gráfico ggplot se construye con **capas** que se suman con `+`. Los componentes principales:
+
+- `ggplot(data, aes(x, y, ...))` — datos y el mapeo *estético* (qué columna va a qué eje).
+- `geom_*()` — el tipo de marca: puntos, barras, líneas, etc.
+- `facet_*()` — paneles separados por una variable.
+- `scale_*()`, `theme_*()`, `labs()` — ajustes de escala, estética y etiquetas.
+
+## Tu primer gráfico
+
+```{r gg_first}
+ggplot(starwars, aes(x = height, y = mass)) +
+  geom_point()
+```
+
+Hay un outlier descomunal (Jabba). Filtremos para ver el resto:
+
+```{r gg_filter}
+starwars %>%
+  filter(mass < 500) %>%
+  ggplot(aes(x = height, y = mass)) +
+  geom_point()
+```
+
+Ahí se ve mejor la relación esperada entre altura y masa.
+
+## Agregar color (otra estética)
+
+```{r gg_color}
+starwars %>%
+  filter(mass < 500, !is.na(species), birth_year < 100) %>%
+  mutate(grupo = if_else(species == "Human", "Humano", "Otro")) %>%
+  ggplot(aes(x = height, y = mass, color = grupo, size = birth_year)) +
+  geom_point(alpha = 1) +
+  theme_minimal()
+```
+
+La **estética** `color` mapea una variable a una dimensión visual. Otras estéticas: `size`, `shape`, `alpha`, `fill`.
+
+## Más de un geom: scatter + tendencia
+
+```{r gg_smooth}
+starwars %>%
+  filter(mass < 500) %>%
+  ggplot(aes(x = height, y = mass)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE, color = "#E76F51")
+```
+
+Cada `geom_*` agrega una capa. Acá `geom_point` dibuja los puntos y `geom_smooth` ajusta y dibuja una regresión.
+
+## Facets — un panel por categoría
+
+```{r gg_facet, fig.width=8, fig.height=4}
+starwars %>%
+  filter(mass < 500, sex %in% c("male", "female")) %>%
+  ggplot(aes(x = height, y = mass)) +
+  geom_point(alpha = 0.7) +
+  facet_wrap(~ sex)
+```
+
+Una línea (`facet_wrap`) y tenés el gráfico replicado por subgrupo. En base R esto es un loop con `par(mfrow=...)`.
+
+## Otros geoms — histograma, boxplot, densidad
+
+```{r gg_hist}
+ggplot(starwars, aes(x = height)) +
+  geom_histogram(bins = 20, fill = "#2A9D8F", color = "white")
+```
+
+```{r gg_box}
+starwars %>%
+  filter(species %in% c("Human", "Droid", "Wookiee", "Gungan")) %>%
+  ggplot(aes(x = species, y = height, fill = species)) +
+  geom_boxplot(alpha = 0.7) +
+  theme(legend.position = "none")
+```
+
+```{r gg_density}
+starwars %>%
+  filter(sex %in% c("male", "female")) %>%
+  ggplot(aes(x = height, fill = sex)) +
+  geom_density(alpha = 0.5)
+```
+
+## Ajustes finales: títulos, ejes, tema
+
+```{r gg_polish, fig.width=8, fig.height=5}
+starwars %>%
+  filter(mass < 500, !is.na(species)) %>%
+  mutate(grupo = if_else(species == "Human", "Humano", "Otro")) %>%
+  ggplot(aes(x = height, y = mass, color = grupo)) +
+  geom_point(size = 2.5, alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_manual(values = c("Humano" = "#2A9D8F", "Otro" = "#E76F51")) +
+  labs(
+    title    = "Altura vs masa en personajes de Star Wars",
+    subtitle = "Excluyendo a Jabba (1358 kg) para que se vea el resto",
+    x        = "Altura (cm)",
+    y        = "Masa (kg)",
+    color    = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+---
+
+# Parte 4 — Combinando dplyr + ggplot
+
+El verdadero poder aparece cuando preparás los datos con dplyr y los pasás directo a ggplot. Algunas preguntas exploratorias resueltas en un solo bloque:
+
+### *¿Qué especies tienen más de 2 personajes y cómo se distribuye su altura?*
+
+```{r combo1, fig.width=8, fig.height=4.5}
+starwars %>%
+  filter(!is.na(species), !is.na(height)) %>%
+  group_by(species) %>%
+  filter(n() >= 2) %>%
+  
+  ggplot(aes(x = reorder(species, height, FUN = median),
+             y = height, fill = species)) +
+  geom_boxplot(alpha = 0.8) +
+  coord_flip() +
+  labs(title = "Distribución de altura por especie",
+       x = NULL, y = "Altura (cm)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+### *¿Hay diferencia de masa media entre especies (filtrando outliers)?*
+
+```{r combo2}
+starwars %>%
+  filter(mass < 500) %>%
+  group_by(species) %>%
+  summarise(n = n(), masa_media = mean(mass, na.rm = TRUE), .groups = "drop") %>%
+  filter(n >= 2) %>%
+  arrange(desc(masa_media)) %>%
+  ggplot(aes(x = reorder(species, masa_media), y = masa_media)) +
+  geom_col(fill = "#264653") +
+  coord_flip() +
+  labs(title = "Masa media por especie  (n ≥ 2, sin outliers)",
+       x = NULL, y = "Masa media (kg)") +
+  theme_minimal()
+```
+
+### *Relación altura–masa coloreada por especie, solo para las especies con varios personajes*
+
+```{r combo3, fig.width=8, fig.height=5}
+starwars %>%
+  filter(mass < 500) %>%
+  group_by(species) %>%
+  filter(n() >= 2) %>%
+  ungroup() %>%
+  ggplot(aes(x = height, y = mass, color = species)) +
+  geom_point(size = 3, alpha = 0.85) +
+  scale_color_brewer(palette = "Set2") +
+  labs(title = "Altura vs masa por especie",
+       x = "Altura (cm)", y = "Masa (kg)", color = "Especie") +
+  theme_minimal(base_size = 13)
+```
+
+Notá cómo cada gráfico arranca con un pipe de dplyr (`filter`, `group_by`, etc.) y termina entrando a `ggplot()`. Esta es la forma idiomática de hacer análisis exploratorio en R moderno.
+
+---
+
+# Parte 5 — `tidyr`: reorganizar la tabla con `pivot_longer()`
+
+Hay una situación que aparece *todo el tiempo*: querés graficar varias columnas a la vez (por ejemplo, altura *y* masa) en el mismo eje, o como facets. ggplot está pensado para datos en formato **largo** (una fila por observación, una columna por variable), no **ancho** (una columna por medición). `tidyr::pivot_longer()` hace la conversión.
+
+```{r tidyr_libs}
+library(tidyr)
+```
+
+Imaginemos que queremos comparar la distribución de altura y masa en un mismo gráfico:
+
+```{r pivot_demo}
+starwars %>%
+  select(name, height, mass) %>%
+  pivot_longer(cols = c(height, mass),
+               names_to = "variable",
+               values_to = "valor") %>%
+  head(8)
+
+```
+
+La tabla pasó de tener una columna `height` y una `mass` (formato ancho) a tener una columna `variable` que identifica qué se midió, y otra `valor` con el número. Ahora podemos graficar las dos distribuciones lado a lado con un solo `facet_wrap`:
+
+```{r pivot_plot, fig.width=8, fig.height=4}
+starwars %>%
+  select(name, height, mass) %>%
+  filter(mass < 500) %>%   # sacamos a Jabba para no romper la escala
+  pivot_longer(cols = c(height, mass),
+               names_to = "variable", values_to = "valor") %>%
+  ggplot(aes(x = valor, fill = variable)) +
+  geom_histogram(bins = 25, color = "white", alpha = 0.85) +
+  facet_wrap(~ variable, scales = "free") +
+  scale_fill_manual(values = c("height" = "#2A9D8F", "mass" = "#E76F51")) +
+  labs(title = "Distribución de altura y masa", x = NULL, y = "Frecuencia") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+`scales = "free"` deja que cada panel tenga sus propios ejes — necesario acá porque altura está en cm (60–260) y masa en kg (15–160).
+
+> **Regla práctica:** si te encontrás copiando-pegando código para hacer "el mismo gráfico pero con otra columna", probablemente quieras `pivot_longer()`.
+
+La operación inversa es `pivot_wider()`, útil cuando preparás tablas para presentación o cuando necesitás formato ancho para algún cálculo.
+
+---
+
+# Parte 6 — `patchwork`: componer múltiples gráficos
+
+Cuando exploramos datos casi siempre queremos ver varios gráficos juntos. `patchwork` permite combinar ggplots con operadores aritméticos: `+` (lado a lado), `/` (apilados), `|` (también lado a lado, con prioridad distinta).
+
+```{r patchwork_libs}
+library(patchwork)
+```
+
+```{r patchwork_demo, fig.width=9, fig.height=4}
+p1 <- starwars %>%
+  filter(mass < 500) %>%
+  ggplot(aes(x = height, y = mass)) +
+  geom_point(alpha = 0.7, color = "#2A9D8F") +
+  labs(title = "Altura vs masa") +
+  theme_minimal()
+
+p2 <- starwars %>%
+  filter(!is.na(species)) %>%
+  count(species, sort = TRUE) %>%
+  slice_head(n = 6) %>%
+  ggplot(aes(x = reorder(species, n), y = n)) +
+  geom_col(fill = "#E76F51") +
+  coord_flip() +
+  labs(title = "Top 6 especies", x = NULL, y = "Cantidad") +
+  theme_minimal()
+
+p1 + p2   # lado a lado
+```
+
+```{r patchwork_stack, fig.width=7, fig.height=6}
+p1 / p2   # apilados
+```
+
+Podés combinar más de dos: `(p1 + p2) / p3` arma una grilla. Y hay un sistema de "anotación" global para títulos y captions:
+
+```{r patchwork_annot, fig.width=9, fig.height=4}
+(p1 + p2) +
+  plot_annotation(
+    title    = "Exploración rápida del dataset starwars",
+    subtitle = "Dos vistas, una sola composición",
+    theme    = theme(plot.title = element_text(face = "bold"))
+  )
+```
+
+Útil para reportes, presentaciones, o simplemente para ver dos cosas relacionadas sin alt-tab.
+
+---
+
+# Cierre — los pocos verbos que vale la pena memorizar
+
+**dplyr:**
+
+| Verbo | Para qué |
+|---|---|
+| `filter()` | Quedarse con filas que cumplen una condición |
+| `select()` | Quedarse / sacar columnas |
+| `mutate()` | Crear o modificar columnas |
+| `arrange()` | Ordenar filas |
+| `group_by() + summarise()` | Resumir por grupos |
+| `count()` | Contar filas por grupo (shortcut de group_by + n) |
+| `distinct()` | Filas únicas |
+| `slice_*()` | Filas por posición (sample, head, tail) |
+
+**ggplot:**
+
+```
+ggplot(data, aes(x, y, color, ...)) +
+  geom_*()        # punto, línea, barra, etc.
+  facet_*()       # paneles
+  scale_*()       # escalas (color, tamaño, ejes)
+  labs()          # títulos
+  theme_*()       # tema visual
+```
+
+**tidyr y patchwork:**
+
+| Función | Para qué |
+|---|---|
+| `pivot_longer()` | Pasar de formato ancho a largo (preparar para ggplot) |
+| `pivot_wider()` | Operación inversa |
+| `p1 + p2` (patchwork) | Componer gráficos lado a lado |
+| `p1 / p2` (patchwork) | Apilar gráficos |
+| `plot_annotation()` | Título global para una composición |
+
+**Recursos para profundizar:**
+
+- *R for Data Science* (Hadley Wickham) — gratis en <https://r4ds.hadley.nz>. Es **el** libro de referencia.
+- Cheatsheets oficiales de [dplyr](https://rstudio.github.io/cheatsheets/data-transformation.pdf) y [ggplot2](https://rstudio.github.io/cheatsheets/data-visualization.pdf). Tenelos a mano.
+- `?dplyr::filter`, `?ggplot2::geom_point`, etc. — la ayuda de R es buena.
+

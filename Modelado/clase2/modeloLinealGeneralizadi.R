@@ -1,4 +1,4 @@
-## Práctica GLM
+## Practica GLM
 
 #### EJ 1 ####  
 
@@ -31,7 +31,7 @@ ggplot(diamonds, aes(x = carat, y = price)) +
   ) +
   theme_minimal()
 
-#Se adquiere una forma lineal. Tiene sentido porque linealiza la relación ¿
+#Se adquiere una forma lineal. Tiene sentido porque linealiza la relaci?n ?
 
 #c
 diamonds <- diamonds %>%
