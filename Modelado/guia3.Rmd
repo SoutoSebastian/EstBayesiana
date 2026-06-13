@@ -1,0 +1,110 @@
+---
+title: "guia3"
+output: html_document
+date: "2026-06-13"
+---
+
+## Item 1
+
+```{r}
+data(Rossi)
+
+library(survival)
+library(carData)
+```
+
+```{r}
+
+km_total <- survfit(Surv(week, arrest) ~ 1, data = Rossi)
+
+summary(km_total)
+
+```
+
+```{r}
+plot(km_total,
+     xlab = "Semanas desde la liberación",
+     ylab = "Probabilidad de no reincidir")
+```
+
+
+Según lo que se oberseva en la curva, aprox un 0.736 no reincide.
+
+
+Ahora estimamos la curva por separado para los grupos con y sin ayuda financiera.
+
+```{r}
+km_fin <- survfit(Surv(week, arrest) ~ fin, data = Rossi)
+
+plot(km_fin,
+     col = c("red", "blue"),
+     lwd = 2,
+     xlab = "Semanas",
+     ylab = "Probabilidad de no reincidir")
+
+legend("bottomleft",
+       legend = c("Sin ayuda financiera", "Con ayuda financiera"),
+       col = c("red", "blue"),
+       lwd = 2)
+```
+
+
+Test de log-rank
+
+```{r}
+logrank <- survdiff(Surv(week, arrest) ~ fin, data = Rossi)
+
+logrank
+```
+
+```{r}
+pchisq(logrank$chisq, df = 1, lower.tail = FALSE)
+```
+
+No hay evidencia significativa de que las curvas son distintas.
+
+
+## Item 2
+
+
+```{r}
+library(survival)
+
+cox_fin <- coxph(Surv(week, arrest) ~ fin, data = Rossi)
+
+summary(cox_fin)
+```
+El exp(coef) es menor a 1, por lo tanto se interpreta que si se recibe ayuda financiera la probabilidad de reincidir es menor que si no se recibe.
+
+
+Ahora podemos estimar las curvas de supervivencia ajustadas:
+
+```{r}
+nuevo <- data.frame(fin = c(0,1))
+
+cox_surv <- survfit(cox_fin, newdata = nuevo)
+
+plot(cox_surv,
+     col = c("red","blue"),
+     lwd = 2,
+     xlab = "Semanas",
+     ylab = "Probabilidad de no reincidir")
+
+legend("bottomleft",
+       legend = c("Sin ayuda financiera",
+                  "Con ayuda financiera"),
+       col = c("red","blue"),
+       lwd = 2)
+```
+
+
+## Item 3
+
+El efecto de recibir ayuda financiera multiplica la probabilidad de reincidir en una semana por exp(coef) = 0.6914. Es decir la probabilidad de reincidir en una semana i no habiendo recibido ayuda financiera es aproximadamente 30% mayor que si se hubiera recibido ayuda.
+
+El IC es [0.4767, 1.003] con un 95% de confianza se puede decir que la ayuda economica induce una reduccion de riesgo de volver a reincidir
+
+
+
+
+
