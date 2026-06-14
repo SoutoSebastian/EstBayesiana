@@ -1,0 +1,176 @@
+---
+title: "guia3"
+output: html_document
+date: "2026-06-13"
+---
+
+## Item 1
+
+```{r}
+library(survival)
+library(carData)
+library(survminer)
+
+data(Rossi)
+```
+
+```{r}
+
+km <- survfit(Surv(week, arrest) ~ 1, data = Rossi)
+
+summary(km)
+
+```
+
+```{r}
+g1 <- ggsurvplot(
+  km,
+  data = Rossi,
+  conf.int = TRUE,
+  risk.table = TRUE,
+  risk.table.height = 0.25,
+  surv.median.line = "hv",
+  xlab = "Semanas desde la liberación",
+  ylab = "Probabilidad de no reincidir",
+  title = "Curva de supervivencia Kaplan-Meier",
+  ggtheme = theme_classic(base_size = 14)
+)
+
+g1
+```
+
+
+Según lo que se oberseva en la curva, aprox un 0.736 no reincide.
+
+
+Ahora estimamos la curva por separado para los grupos con y sin ayuda financiera.
+
+```{r}
+km_fin <- survfit(Surv(week, arrest) ~ fin, data = Rossi)
+
+```
+
+```{r}
+g2 <- ggsurvplot(
+  km_fin,
+  data = Rossi,
+  conf.int = TRUE,
+  pval = TRUE,
+  risk.table = TRUE,
+  risk.table.height = 0.25,
+  legend.title = "Ayuda financiera",
+  legend.labs = c("No", "Sí"),
+  xlab = "Semanas desde la liberación",
+  ylab = "Probabilidad de no reincidir",
+  title = "Kaplan-Meier según ayuda financiera",
+  ggtheme = theme_classic(base_size = 14)
+)
+
+g2
+```
+
+
+Test de log-rank
+
+```{r}
+logrank <- survdiff(Surv(week, arrest) ~ fin, data = Rossi)
+
+logrank
+```
+
+```{r}
+pchisq(logrank$chisq, df = 1, lower.tail = FALSE)
+```
+
+No hay evidencia significativa de que las curvas son distintas.
+
+
+## Item 2
+
+
+```{r}
+library(survival)
+
+cox_fin <- coxph(Surv(week, arrest) ~ fin, data = Rossi)
+
+summary(cox_fin)
+```
+El exp(coef) es menor a 1, por lo tanto se interpreta que si se recibe ayuda financiera la probabilidad de reincidir es menor que si no se recibe.
+
+
+Ahora podemos estimar las curvas de supervivencia ajustadas:
+
+```{r}
+nuevo <- data.frame(fin = c(0,1))
+
+cox_surv <- survfit(cox_fin, newdata = nuevo)
+
+ggsurvplot(
+  cox_surv,
+  data = Rossi,
+  conf.int = TRUE,
+  legend.title = "Ayuda financiera",
+  legend.labs = c("No", "Sí"),
+  xlab = "Semanas desde la liberación",
+  ylab = "Probabilidad de no reincidir",
+  title = "Curvas de supervivencia estimadas por el modelo de Cox",
+  ggtheme = theme_classic(base_size = 14)
+)
+```
+
+
+## Item 3
+
+El efecto de recibir ayuda financiera multiplica la probabilidad de reincidir en una semana por exp(coef) = 0.6914. Es decir la probabilidad de reincidir en una semana no habiendo recibido ayuda financiera es aproximadamente 30% mayor que si se hubiera recibido ayuda.
+
+El IC es [0.4767, 1.003] con un 95% de confianza se puede decir que la ayuda economica induce una reduccion de riesgo de volver a reincidir, contiene al 1 por poquito... y el p-valor supera 0.05 por poco tambien
+
+
+# Item 4
+
+Modelo reducido 
+
+```{r}
+cox1 <- coxph(
+  Surv(week, arrest) ~ fin,
+  data = Rossi
+)
+```
+
+
+Modelo ampliado
+
+```{r}
+cox2 <- coxph(
+  Surv(week, arrest) ~ fin + age,
+  data = Rossi
+)
+```
+
+
+Comparacion
+
+```{r}
+anova(cox1, cox2, test = "Chisq")
+```
+
+El p-value es menor a 0.05. Por lo tanto hay ev significativa como para rechazar H0. Por lo tanto la variable age mejora significativamente el modelo.
+
+
+# Item 5
+
+Ahora veamos que variables son significativas...
+
+
+```{r}
+cox_full <- coxph(
+  Surv(week, arrest) ~ fin + age + race + wexp + mar + paro + prio,
+  data = Rossi
+)
+
+summary(cox_full)
+```
+
+Viendo los p-valores solo nos quedamos con finyes, age y prio.
+
+
