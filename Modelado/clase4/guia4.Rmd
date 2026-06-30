@@ -1,0 +1,252 @@
+---
+title: "guia4"
+author: "Sebastian"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+library(rstanarm)
+library(dplyr)
+library(ggplot2)
+library(lme4)
+```
+
+```{r}
+ data <- radon
+```
+
+# Item 1: Exploración
+
+```{r}
+county_summary <- radon %>%
+  group_by(county) %>%
+  summarise(
+    n = n(),
+    mean_radon = mean(log_radon),
+    .groups = "drop"
+  )
+
+head(county_summary)
+  
+```
+
+
+```{r}
+ggplot(county_summary, aes(x = n, y = mean_radon)) +
+  geom_point() +
+  labs(
+    x = "Número de mediciones",
+    y = "Promedio de log_radon"
+  ) +
+  theme_minimal()
+```
+
+
+
+Los promedios de los counties con pocas mediciones varían mucho más que los que tienen más mediciones. Esto se debe a que al tener poca data se pueden obtener promedios "extremos". Un modelo sin pooling no pesa la cantidad de mediciones, lo que va a introducir esta varianza indeseada al modelo.
+
+#Item 2: Efectos fijos (sin pooling)
+
+
+```{r}
+m1 <- lm(log_radon ~ county - 1, data = radon)
+
+m2 <- lm(log_radon ~ county - 1 + floor, data = radon)
+```
+
+Comparamos con anova
+
+```{r}
+anova(m1, m2)
+```
+
+
+El p-valor es muy chico... por lo tanto agregar floor al modelo mejora significativamente.
+
+
+```{r}
+summary(m2)
+```
+
+
+EL coeficiente de floor es negativo, lo que quiere decir que estar en planta baja disminuye la concentracion de radon respecto de un sótano. Si es coherente, ya que se filtra desde el suelo.
+
+
+#Intercepts aleatorios (partial pooling)
+
+
+```{r}
+m3 <- lmer(log_radon ~ (1 | county), data = radon)
+```
+
+leemos las componentes de varianza
+
+```{r}
+summary(m3)
+```
+correlación intra-clase:
+
+```{r}
+vc <- VarCorr(m3)
+
+tau2 <- attr(vc$county, "stddev")^2
+sigma2 <- attr(vc, "sc")^2
+
+tau2 / (tau2 + sigma2)
+```
+
+Aproximadamente el 13% de la variabilidad se explica por diferencias entre counties.
+
+
+```{r}
+ranef(m3)
+```
+esto es cuanto difiere del promedio cada intercept por county.
+
+
+# Item 4: agregamos floor como efecto fijo
+
+
+```{r}
+m4 <- lmer(log_radon ~ floor + (1 | county), data = radon)
+```
+
+Calculamos varianzas
+
+```{r}
+vc <- as.data.frame(VarCorr(m4))
+
+tau2 <- vc$vcov[1]
+sigma2 <- vc$vcov[2]
+
+ICC <- tau2 / (tau2 + sigma2)
+ICC
+```
+
+
+
+```{r}
+summary(m4)
+```
+
+
+no cambia mucho el coeficiente...
+
+
+# Item 5: Pendientes aleatorias
+
+```{r}
+m5 <- lmer(log_radon ~ floor + (1 + floor | county), data = radon)
+
+summary(m5)
+```
+
+
+
+
+Ahora aparecen:
+
+- varianza del intercept
+- varianza de la pendiente de floor
+- correlacion entre intercept y pendiente
+
+La correlación es -0.37, entonces los counties con promedio más alto tienden a tener pendientes más bajas. Se podría decir que es mayor la diferencia entre sotano y planta baja.
+
+
+# Item 6: Predictor a nivel de grupo
+
+```{r}
+m6 <- lmer(log_radon ~ floor + log_uranium + (1 + floor | county),
+           data = radon)
+
+summary(m6)
+```
+
+
+Tiene signo positivo, esto quiere decir que a mayor log_uranium mayor log_radon. La varianza entre counties disminuye, tiene sentido que pase ya que la variable agregada explica log_radon. Antes las diferencias entre counties eran unicamente absorbidas por el efecto aleatorio, ahora ya no.
+
+
+```{r}
+anova(m3, m4, m5, m6)
+```
+- Agregar floor mejora significativamente
+- Pendientes aleatorias no mejoran sig
+- Agregar log_uranium como efecto fijo mejora significativamente
+
+# Item 7: Gráfico de shrinkage.
+
+Modelo sin pooling:
+
+```{r}
+m1 <- lm(log_radon ~ county - 1, data = radon)
+
+fixed_intercepts <- coef(m1)
+```
+
+Modelo mixto:
+
+```{r}
+m3 <- lmer(log_radon ~ (1 | county), data = radon)
+
+global <- fixef(m3)[1]
+
+random <- ranef(m3)$county[,1]
+
+mixed_intercepts <- global + random
+```
+
+
+Graficamos:
+
+```{r}
+plot_data <- data.frame(
+  county = sub("^county", "", names(fixed_intercepts)),
+  fixed = fixed_intercepts,
+  mixed = mixed_intercepts
+)
+
+plot_data <- left_join(plot_data, county_summary, by = "county")
+
+ggplot(plot_data,
+       aes(x = fixed,
+           y = mixed,
+           size = n)) +
+  geom_point(alpha = 0.7) +
+  geom_abline(slope = 1,
+              intercept = 0,
+              linetype = "dashed") +
+  labs(
+    x = "Intercepto sin pooling",
+    y = "Intercepto con partial pooling",
+    size = "N° mediciones"
+  ) +
+  theme_minimal()
+```
+
+En el modelo sin pooling los datos se estiman unicamente con los datos de ese county. Entonces si tenemos poca data se obtienen promedios mas variados. Con pooling también se tiene en cuenta el promedio de los otros counties y la variabilidad. Entonces en el grafico se ve el fenomeno de shrinkage que produce un encogimiento en el eje y que corresponde a los interceptos estimados con partial pooling.
+
+
+# Item 8: predecir un county nuevo
+
+No se puede hacer con el modelo lineal. Ya que el modelo generó un coeficiente para cada county observado. Y no puede generar información para uno nuevo.
+
+Ahora con modelo mixto:
+
+
+
+```{r}
+nuevo <- data.frame(
+  county = "NUEVO",
+  floor = 0
+)
+
+predict(m4,
+        newdata = nuevo,
+        allow.new.levels = TRUE)
+```
+
+
+
+
+Se puede hacer porque el modelo mixto no estima un parametro para cada categoría (county) sino que estima un promedio global y luego efectos aleatorios. Devuelve 1.49, que es el intercept estimado.
