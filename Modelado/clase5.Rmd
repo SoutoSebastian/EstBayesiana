@@ -1,0 +1,377 @@
+---
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(mgcv)
+library(ggplot2)
+```
+
+# Item 1
+
+```{r}
+bikes <- read.csv("bikes.csv")
+```
+
+
+```{r}
+ggplot(bikes, aes(x = hr, y = cnt)) +
+  geom_point(alpha = 0.3) +
+  labs(
+    title = "Cantidad de bicicletas según la hora del día",
+    x = "Hora del día",
+    y = "Cantidad de bicicletas"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+promedio_hr <- bikes %>%
+  group_by(hr) %>%
+  summarise(cnt_promedio = mean(cnt))
+
+ggplot(promedio_hr, aes(x = hr, y = cnt_promedio)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_x_continuous(breaks = 0:23) +
+  labs(
+    title = "Promedio de bicicletas alquiladas por hora",
+    x = "Hora del día",
+    y = "Promedio de bicicletas"
+  ) +
+  theme_minimal()
+```
+
+
+
+```{r}
+set.seed(123)
+
+n <- nrow(bikes)
+
+train <- sample(1:n, size = 0.7*n)
+
+train_data <- bikes[train, ]
+test_data  <- bikes[-train, ]
+```
+
+
+
+
+```{r}
+modelo_lineal <- gam(cnt ~ hr, data = train_data)
+
+pred <- predict(modelo_lineal, newdata = test_data)
+```
+
+
+```{r}
+mse <- mean((test_data$cnt - pred)^2)
+
+mse
+```
+
+
+```{r}
+grid <- data.frame(hr = seq(0, 23, length.out = 200))
+grid$pred <- predict(modelo_lineal, newdata = grid)
+
+ggplot(test_data, aes(x = hr, y = cnt)) +
+  geom_point(alpha = 0.4) +
+  geom_line(data = grid, aes(y = pred), color = "red", linewidth = 1.2) +
+  labs(
+    title = "Modelo lineal sobre el conjunto de test",
+    x = "Hora del día",
+    y = "Cantidad de bicicletas"
+  ) +
+  theme_minimal()
+```
+Una recta no sirve porque la relación es no lineal...
+
+
+
+# Item 2
+
+
+```{r}
+ks <- c(3, 6, 12, 24)
+
+
+mse <- numeric(length(ks))
+modelos <- vector("list", length(ks))
+
+for(i in seq_along(ks)){
+
+  modelos[[i]] <- gam(
+    cnt ~ s(hr, k = ks[i], bs = "cr"),
+    data = train_data
+  )
+
+  pred <- predict(modelos[[i]], newdata = test_data)
+
+  mse[i] <- mean((test_data$cnt - pred)^2)
+}
+
+data.frame(k = ks, MSE = mse)
+```
+
+
+```{r}
+grid <- data.frame(hr = seq(0, 23, length.out = 300))
+
+predicciones <- lapply(seq_along(ks), function(i){
+
+  data.frame(
+    hr = grid$hr,
+    pred = predict(modelos[[i]], newdata = grid),
+    k = factor(ks[i])
+  )
+
+})
+
+predicciones <- bind_rows(predicciones)
+```
+
+
+```{r}
+
+ggplot(train_data, aes(hr, cnt)) +
+  geom_point(alpha = 0.2) +
+  geom_line(
+    data = predicciones,
+    aes(y = pred, color = k),
+    linewidth = 1.2
+  ) +
+  labs(
+    title = "Splines penalizados para distintos valores de k",
+    x = "Hora del día",
+    y = "Cantidad de bicicletas",
+    color = "k"
+  ) +
+  theme_minimal()
+```
+
+A partir de 12 nodos se capturan los picos de demanda. Con k muy chico no se capturan estas tendencias.
+
+
+
+# Item 3
+
+```{r}
+modelo_sp0 <- gam(
+  cnt ~ s(hr, k = 24, bs = "cr", sp = 0),
+  data = train_data
+)
+
+modelo_sp_grande <- gam(
+  cnt ~ s(hr, k = 24, bs = "cr", sp = 1e4),
+  data = train_data
+)
+```
+
+
+```{r}
+pred_sp0 <- predict(modelo_sp0, newdata = test_data)
+pred_sp_grande <- predict(modelo_sp_grande, newdata = test_data)
+
+mse_sp0 <- mean((test_data$cnt - pred_sp0)^2)
+mse_sp_grande <- mean((test_data$cnt - pred_sp_grande)^2)
+
+mse_sp0
+mse_sp_grande
+```
+
+
+```{r}
+summary(modelo_sp0)$s.table[, "edf"]
+
+summary(modelo_sp_grande)$s.table[, "edf"]
+```
+
+```{r}
+grid <- data.frame(hr = seq(0, 23, length.out = 300))
+
+curvas <- rbind(
+  data.frame(
+    hr = grid$hr,
+    pred = predict(modelo_sp0, newdata = grid),
+    Modelo = "sp = 0"
+  ),
+  data.frame(
+    hr = grid$hr,
+    pred = predict(modelo_sp_grande, newdata = grid),
+    Modelo = "sp = 1e4"
+  )
+)
+```
+
+```{r}
+ggplot(train_data, aes(hr, cnt)) +
+  geom_point(alpha = 0.2) +
+  geom_line(
+    data = curvas,
+    aes(y = pred, color = Modelo),
+    linewidth = 1.2
+  ) +
+  labs(
+    title = "Efecto del parámetro de penalización",
+    x = "Hora del día",
+    y = "Cantidad de bicicletas"
+  ) +
+  theme_minimal()
+```
+
+El de sp = 0 "sobreajusta" ya que no hay penalización a la segunda derivada. Mientras que con sp=1e24 subajusta ya que la penalizacion es muy grande.
+
+
+
+# Item 4
+
+
+```{r}
+modelo_gcv <- gam(
+  cnt ~ s(hr, k = 24, bs = "cr"),
+  data = train_data
+)
+```
+
+```{r}
+modelo_gcv$sp
+```
+
+
+
+```{r}
+summary(modelo_gcv)$s.table[, "edf"]
+```
+
+```{r}
+pred_gcv <- predict(modelo_gcv, newdata = test_data)
+
+mse_gcv <- mean((test_data$cnt - pred_gcv)^2)
+
+mse_gcv
+```
+
+
+```{r}
+grid <- data.frame(hr = seq(0, 23, length.out = 300))
+grid$pred <- predict(modelo_gcv, newdata = grid)
+
+ggplot(train_data, aes(hr, cnt)) +
+  geom_point(alpha = 0.2) +
+  geom_line(data = grid, aes(y = pred), color = "steelblue", linewidth = 1.2) +
+  labs(
+    title = "Spline penalizado con sp elegido por GCV",
+    x = "Hora del día",
+    y = "Cantidad de bicicletas"
+  ) +
+  theme_minimal()
+```
+
+Parece haber encontrado un equilibrio...
+
+
+
+# Item 5 
+
+
+me aseguro que sea un factor
+
+```{r}
+train_data$mnth <- factor(train_data$mnth)
+test_data$mnth <- factor(test_data$mnth)
+```
+
+
+y ahora ajusto el modelo
+
+```{r}
+modelo_re <- gam(
+  cnt ~ s(hr, bs = "cr") + s(mnth, bs = "re"),
+  data = train_data
+)
+```
+
+
+```{r}
+pred_re <- predict(modelo_re, newdata = test_data)
+
+mse_re <- mean((test_data$cnt - pred_re)^2)
+
+mse_re
+```
+
+mejora el mse
+
+```{r}
+coef_re <- coef(modelo_re)
+
+coef_re[grep("mnth", names(coef_re))]
+```
+
+Un coeficiente positivo significa que ese mes hay una demanda mayor a la media, mientras que un coeficiente negativo hay menos demanda que la media.
+
+
+# Item 6
+
+
+Ajustamos el modelo Poisson
+
+
+```{r}
+modelo_pois <- gam(
+  cnt ~ s(hr, bs = "cr") + s(mnth, bs = "re"),
+  family = poisson(link = "log"),
+  data = train_data
+)
+```
+
+
+
+```{r}
+pred_pois <- predict(modelo_pois,
+                     newdata = test_data,
+                     type = "response")
+
+mse_pois <- mean((test_data$cnt - pred_pois)^2)
+
+mse_pois
+```
+
+```{r}
+grid <- data.frame(
+  hr = seq(0, 23, length.out = 300),
+  mnth = factor(6, levels = levels(train_data$mnth))
+)
+
+curvas <- rbind(
+  data.frame(
+    hr = grid$hr,
+    pred = predict(modelo_re,
+                   newdata = grid,
+                   type = "response"),
+    Modelo = "Gaussiano"
+  ),
+  data.frame(
+    hr = grid$hr,
+    pred = predict(modelo_pois,
+                   newdata = grid,
+                   type = "response"),
+    Modelo = "Poisson"
+  )
+)
+
+ggplot(train_data, aes(hr, cnt)) +
+  geom_point(alpha = 0.2) +
+  geom_line(data = curvas,
+            aes(y = pred, color = Modelo),
+            linewidth = 1.2) +
+  theme_minimal()
+```
+
