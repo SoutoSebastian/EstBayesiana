@@ -1,0 +1,142 @@
+---
+title: "Ejercicio_Pingüinos"
+author: "Sebastian Souto"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Definición de datos y simulación
+
+```{r, echo = FALSE}
+set.seed(123) #para reproducibilidad
+
+#cantidad de individuos
+n <- 500
+
+
+#Grupos: 0 = niños, 1 = adultos
+G <- rbinom(n, size = 1, prob = 0.5)
+
+
+#Cantidad de pasos
+X <- ifelse(
+  G == 0,
+  rnorm(n, mean = 15000, sd = 1000), #niños
+  rnorm(n, mean = 10000, sd = 1000) #adultos
+)
+
+#Distancia recorrida
+Y <- ifelse(
+  G == 0,
+  -1.5 + 0.0005 * X + rnorm(n,mean=0, sd = 0.5),
+  3 + 0.0005 * X + rnorm(n, mean = 0, sd = 0.5)
+)
+
+#Convertimos G en factor
+G <- factor(G,
+            levels = c(0,1),
+            labels = c("Niños", "Adultos"))
+
+datos <- data.frame(X,Y,G)
+```
+
+
+## Gráficos
+
+```{r}
+library(ggplot2)
+
+ggplot(datos, aes(x = X, y = Y, color = G)) +
+  
+  # Puntos
+  geom_point(alpha = 0.55, size = 2.5) +
+  
+  # Recta para cada grupo
+  geom_smooth(
+    method = "lm",
+    se = FALSE,
+    linewidth = 1.2
+  ) +
+  
+  # Títulos y etiquetas
+  labs(
+    title = "Pasos realizados vs. distancia recorrida",
+    x = "Cantidad de pasos",
+    y = "Distancia recorrida (km)",
+    color = "Grupo"
+  ) +
+  
+  # Tema visual
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18),
+    plot.subtitle = element_text(size = 13),
+    legend.position = "top"
+  )
+```
+
+```{r}
+ggplot(datos, aes(x = X, y = Y)) +
+  
+  geom_point(alpha = 0.5, size = 2.5) +
+  
+  geom_smooth(
+    method = "lm",
+    se = FALSE,
+    linewidth = 1.3
+  ) +
+  
+  labs(
+    title = "Asociación global",
+    subtitle = "Sin considerar el grupo etario",
+    x = "Cantidad de pasos",
+    y = "Distancia recorrida (km)"
+  ) +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 18),
+    plot.subtitle = element_text(size = 13)
+  )
+```
+
+### Mecanismo de generación de datos
+
+Se generaron datos de 500 "personas". Primero, se generó el grupo de cada individuo mediante:
+
+$$
+G_i \sim Bernoulli(0.5)
+$$
+
+Luego, la cantidad de pasos se generó dependiendo del grupo:
+
+$$
+X_i \mid G_i =
+\begin{cases}
+N(15000,1000^2), & G_i=\text{Niños}\\
+N(10000,1000^2), & G_i=\text{Adultos}
+\end{cases}
+$$
+
+Finalmente, la distancia recorrida se generó como una función lineal de los pasos, con un término diferente para cada grupo:
+
+$$
+Y_i \mid X_i,G_i =
+\begin{cases}
+-1.5+0.0005X_i+\epsilon_i, & G_i=\text{Niños}\\
+3+0.0005X_i+\epsilon_i, & G_i=\text{Adultos}
+\end{cases}
+$$
+
+donde
+
+$$
+\epsilon_i\sim N(0,0.5^2).
+$$
+
+De esta manera, la relación entre pasos y distancia es positiva dentro de ambos grupos, ya que el coeficiente de \(X\) es \(0.0005>0\). Sin embargo, los adultos tienen en promedio menos pasos y mayor distancia recorrida que los niños, lo que genera una asociación negativa al analizar todos los individuos conjuntamente.
+
