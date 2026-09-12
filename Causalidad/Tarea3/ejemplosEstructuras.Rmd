@@ -1,0 +1,167 @@
+---
+title: "EjemplosEstructuras"
+author: "Sebastian Souto"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+# Ejemplos de estructuras.
+
+
+## 1. Colisionador
+
+Primero genermos los datos para las variables aleatorias planteadas
+
+```{r, echo = FALSE}
+# Cargar librerías
+library(ggplot2)
+library(dplyr)
+
+
+set.seed(42)
+N <- 400
+
+# Creamos el data frame generando las variables de forma independiente.
+datos <- data.frame(
+  Manejar_Lento = rbinom(N, size = 1, prob = 0.50), # X
+  Hay_Trafico   = rbinom(N, size = 1, prob = 0.50)  # Y
+)
+
+# Z es el Colisionador (Llegar tarde). Consideramos que se llega tarde si se maneja lento o hay tráfico.
+datos$Llegar_Tarde <- ifelse(datos$Manejar_Lento + datos$Hay_Trafico >= 1, 1, 0)
+
+
+```
+
+Ahora vamos a crear dos "sub" dataframes. En uno de ellos calculamos la estimación de la probabilidad de que haya tráfico, condicionando por si esa persona maneja lento o rápido. En el otro, nos quedamos únicamente con las personas que llegaron tarde y repetimos el proceso anterior. 
+
+```{r, echo = FALSE}
+
+resumen_global <- datos %>%
+  group_by(Manejar_Lento = factor(Manejar_Lento, labels = c("Rápido / Normal", "Lento"))) %>%
+  summarise(Prob_Trafico = mean(Hay_Trafico))
+
+# B. Filtrando únicamente en tu dataframe los que llegaron tarde (Llegar_Tarde == 1):
+resumen_tarde <- datos %>%
+  filter(Llegar_Tarde == 1) %>%
+  group_by(Manejar_Lento = factor(Manejar_Lento, labels = c("Rápido / Normal", "Lento"))) %>%
+  summarise(Prob_Trafico = mean(Hay_Trafico))
+```
+
+
+Ahora hacemos gráficos comparativos para cada dataframe
+
+```{r}
+# Gráfico 1: Población General (Sin condicionar en Z)
+g1 <- ggplot(resumen_global, aes(x = Manejar_Lento, y = Prob_Trafico, fill = Manejar_Lento)) +
+  geom_col(width = 0.5, alpha = 0.85) +
+  geom_text(aes(label = round(Prob_Trafico,2)), 
+            vjust = -0.5, fontface = "bold", size = 4.5) +
+  scale_y_continuous(limits = c(0, 1.1)) +
+  scale_fill_manual(values = c("Rápido / Normal" = "#2b5c8f", "Lento" = "#e74c3c")) +
+  labs(
+    title = "Población General",
+    subtitle = "Manejar Lento y Tráfico son INDEPENDIENTES (Sin condicionar)",
+    x = "Manejar Lento (X)",
+    y = "P(Hay Tráfico = 1 | X)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none", plot.title = element_text(face = "bold"))
+
+g1
+```
+
+
+```{r}
+# Gráfico 2: Condicionando en el Colisionador (Llegar_Tarde == 1)
+g2 <- ggplot(resumen_tarde, aes(x = Manejar_Lento, y = Prob_Trafico, fill = Manejar_Lento)) +
+  geom_col(width = 0.5, alpha = 0.85) +
+  geom_text(aes(label = round(Prob_Trafico, 2)), 
+            vjust = -0.5, fontface = "bold", size = 4.5) +
+  scale_y_continuous(limits = c(0, 1.1)) +
+  scale_fill_manual(values = c("Rápido / Normal" = "#2b5c8f", "Lento" = "#e74c3c")) +
+  labs(
+    title = "Días que Llegaste Tarde (Z = 1)",
+    subtitle = "Sesgo de Selección / Bad Control (Aparece dependencia)",
+    x = "Manejar Lento (X)",
+    y = "P(Hay Tráfico = 1 | Llegar Tarde = 1, X)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none", plot.title = element_text(face = "bold"))
+
+g2
+```
+
+
+## 2. Tenedor
+
+
+### Generacion de datos
+```{r}
+
+N <- 400
+
+#Z: Horas en PC
+Z_nivel <- sample(c("Pocas Hs PC", "Medias Hs PC", "Muchas Hs PC"), N, replace = TRUE, prob = c(0.33, 0.33, 0.34))
+Z_nivel <- factor(Z_nivel, levels = c("Pocas Hs PC", "Medias Hs PC", "Muchas Hs PC"))
+
+# Asignar un valor base de Z para la simulación
+Z_val <- c("Pocas Hs PC" = 2, "Medias Hs PC" = 6, "Muchas Hs PC" = 10)[Z_nivel]
+
+# X: Aumento en lentes
+X_aumento <- pmax(0, 0.3 * Z_val + rnorm(N, mean = 0, sd = 0.5))
+
+# Y: Habilidad para programar (1 a 5)
+Y_habilidad <- 1 + 0.35 * Z_val + rnorm(N, mean = 0, sd = 0.4)
+Y_habilidad <- pmax(1, pmin(5, Y_habilidad)) # Acotar entre 1 y 5
+
+# Crear Dataframe
+datos_lentes <- data.frame(
+  Grupo_Horas  = Z_nivel,
+  Aumento   = X_aumento,
+  Habilidad = Y_habilidad
+)
+
+
+```
+
+### Modelos Lineales
+
+```{r}
+# Modelo 1: Ingenuo (Sin ajustar por Horas en PC)
+fit_ingenuo <- lm(Habilidad ~ Aumento, data = datos_lentes)
+cat("=== 1. REGRESIÓN INGENUA (Sin ajustar por Z) ===\n")
+print(summary(fit_ingenuo)$coefficients)
+# Muestra una asociación positiva espuria entre Aumento y Habilidad.
+
+# Modelo 2: Ajustado por Horas en PC (Z)
+fit_ajustado <- lm(Habilidad ~ Aumento + Grupo_Horas, data = datos_lentes)
+cat("\n=== 2. REGRESIÓN AJUSTADA (Condicionando por Z) ===\n")
+print(summary(fit_ajustado)$coefficients)
+# El efecto de 'Aumento' pasa a ser ~0 y no significativo (X e Y son independientes dado Z).
+```
+
+
+### Gráficos
+
+```{r}
+
+ggplot(datos_lentes, aes(x = Aumento, y = Habilidad, color = Grupo_Horas)) +
+  geom_point(alpha = 0.6, size = 2) +
+  # Regresión ingenua global (pendiente positiva)
+  geom_smooth(method = "lm", color = "black", linetype = "dashed", se = FALSE, linewidth = 1) +
+  # Regresión condicional por estrato Z (líneas completamente planas)
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1.2) +
+  scale_y_continuous(limits = c(1, 5), breaks = 1:5) +
+  scale_color_manual(values = c("Pocas Hs PC" = "#2b5c8f", "Medias Hs PC" = "#e67e22", "Muchas Hs PC" = "#e74c3c")) +
+  labs(
+    title = "Tenedor: Aumento de Lentes vs Habilidad para Programar",
+    subtitle = "Línea negra: Asociación Espuria | Líneas de color: Independencia Condicional dado Z",
+    x = "Aumento en los Lentes (X)",
+    y = "Habilidad para Programar (Y)",
+    color = "Horas en la PC (Z)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
