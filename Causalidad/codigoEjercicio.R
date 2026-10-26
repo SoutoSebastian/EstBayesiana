@@ -27,6 +27,20 @@ mu_ht_mean <- mean(ifelse(df$A == 1, df$Y / prom,0))
 
 
 #DR con regresión lineal y propensity logistico
+m_x   <- predict(modelo_y, newdata = df)
+y_obs <- ifelse(is.na(df$Y), 0, df$Y)
+mu_dr <- mean(m_x + (df$A / pi_x) * (y_obs - m_x))
+
+
+#DR con regresión cuadrática y propensity constante
+m_x2 <- predict(modelo_y2, newdata = df)
+y_obs <- ifelse(is.na(df$Y), 0, df$Y)
+mu_dr <- mean(m_x2 + (df$A / prom) * (y_obs - m_x2))
+
+
+#DR con regresión lineal y propensity constante
+
+mu_dr3 <- mean(m_x + (df$A / prom) * (y_obs - m_x))
 
 
 
